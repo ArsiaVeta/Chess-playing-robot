@@ -1,1 +1,1 @@
-# -hess-playing-robot
+# Chess-playing-robot
