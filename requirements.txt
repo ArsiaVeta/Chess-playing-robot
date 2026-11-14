@@ -1,0 +1,4 @@
+numpy>=2.0
+opencv-python>=4.9
+chess>=1.10
+pytest>=8.0
