@@ -1,0 +1,6 @@
+[engine]
+# Set this to the Stockfish executable path or put it on PATH.
+path = "stockfish"
+time = 0.5
+timeout = 10.0
+# depth = 12

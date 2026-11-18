@@ -25,6 +25,7 @@ env/
 .env.*
 !.env.example
 *.local
+config/*.local.toml
 
 # Logs and temporary files
 *.log
