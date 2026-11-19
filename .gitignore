@@ -25,7 +25,7 @@ env/
 .env.*
 !.env.example
 *.local
-config/board.json
+config/*.local.toml
 
 # Logs and temporary files
 *.log
