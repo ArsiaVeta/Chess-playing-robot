@@ -49,4 +49,4 @@ class ActionResult:
 class Arm(ABC):
     @abstractmethod
     def execute(self, action: Action) -> ActionResult:
-        """Execute one action and report its result."""
+        """Execute one action and report its result after motion has stopped."""

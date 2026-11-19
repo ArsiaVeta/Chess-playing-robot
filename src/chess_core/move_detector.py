@@ -28,7 +28,8 @@ def _occupancy(board: chess.Board) -> dict[str, bool]:
 
 
 def detect_move(board: chess.Board, before: BoardObservation, after: BoardObservation,
-                min_confidence: float = 0.9) -> MoveDetection:
+                min_confidence: float = 0.9, *, require_changes: bool = False) -> MoveDetection:
+    """Set require_changes for vision with a confirmed reference frame."""
     if not 0 <= min_confidence <= 1:
         raise ValueError("min_confidence must be between 0 and 1")
     if not before.stable or not after.stable:
@@ -45,9 +46,8 @@ def detect_move(board: chess.Board, before: BoardObservation, after: BoardObserv
         trial.push(move)
         if _occupancy(trial) != dict(after.occupied):
             continue
-        # An empty set means no visual change evidence is available, not proof of no changes.
         changed = {chess.square_name(s) for s in chess.SQUARES if original.get(s) != trial.piece_at(s)}
-        if after.changed_squares and not changed.issubset(after.changed_squares):
+        if (require_changes or after.changed_squares) and not changed.issubset(after.changed_squares):
             continue
         candidates.append(move)
     candidates = tuple(candidates)
