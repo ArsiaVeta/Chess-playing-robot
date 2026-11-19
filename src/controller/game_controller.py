@@ -36,7 +36,7 @@ class Vision(Protocol):
         """
 
     def confirm_observation(self, observation: BoardObservation) -> None:
-        """Use the exact frame behind this observation as the new reference."""
+        """Use the exact frame as reference, leaving the previous one intact on failure."""
 
 
 class MoveEngine(Protocol):
@@ -70,6 +70,7 @@ class GameController:
         self.observation_timeout = observation_timeout
         self.state = GameState.FINISHED if game.outcome else GameState.WAIT_HUMAN
         self.error: str | None = None
+        self.last_observation_timeout: str | None = None
         self.last_detection: MoveDetection | None = None
         self._baseline: BoardObservation | None = None
         self._pending_move: chess.Move | None = None
@@ -98,14 +99,17 @@ class GameController:
             self._verify_robot()
             return
         if self._baseline is None:
-            observation = self.vision.get_initial_observation(timeout=self.observation_timeout)
-            if not self._reliable(observation):
+            observation = self._read_observation(initial=True)
+            if observation is None or not self._reliable(observation):
                 return
             self._check_position(self.game.board, observation)
             self._confirm_observation(observation)
         elif self.game.turn != self.robot_color:
             self.state = GameState.VERIFY_HUMAN
-            observation = self.vision.get_observation(timeout=self.observation_timeout)
+            observation = self._read_observation()
+            if observation is None:
+                self.state = GameState.WAIT_HUMAN
+                return
             detection = detect_move(
                 self.game.board, self._baseline, observation, self.min_confidence,
                 require_changes=True,
@@ -114,8 +118,8 @@ class GameController:
             if detection.status is not DetectionStatus.FOUND or detection.move is None:
                 self.state = GameState.WAIT_HUMAN
                 return
-            self.game.push(detection.move)
             self._confirm_observation(observation)
+            self.game.push(detection.move)
         if self.game.outcome is not None:
             self.state = GameState.FINISHED
         elif self.game.turn == self.robot_color:
@@ -141,8 +145,8 @@ class GameController:
         self._verify_robot()
 
     def _verify_robot(self) -> None:
-        observation = self.vision.get_observation(timeout=self.observation_timeout)
-        if not self._reliable(observation):
+        observation = self._read_observation()
+        if observation is None or not self._reliable(observation):
             return
         move = self._pending_move
         assert move is not None
@@ -155,10 +159,19 @@ class GameController:
         }
         if not changed.issubset(observation.changed_squares):
             raise ValueError("Observed changes do not match the robot move")
+        self._confirm_observation(observation)
         self.game.push(move)
         self._pending_move = None
-        self._confirm_observation(observation)
         self.state = GameState.FINISHED if self.game.outcome else GameState.WAIT_HUMAN
+
+    def _read_observation(self, *, initial: bool = False) -> BoardObservation | None:
+        read = self.vision.get_initial_observation if initial else self.vision.get_observation
+        self.last_observation_timeout = None
+        try:
+            return read(timeout=self.observation_timeout)
+        except TimeoutError as exc:
+            self.last_observation_timeout = str(exc) or "Waiting for a stable frame timed out"
+            return None
 
     def _confirm_observation(self, observation: BoardObservation) -> None:
         self.vision.confirm_observation(observation)

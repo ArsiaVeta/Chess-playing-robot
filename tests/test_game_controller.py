@@ -87,7 +87,7 @@ def test_complete_fools_mate_with_vision_and_arm():
     ]
 
 
-def test_human_observation_timeout_leaves_reference_and_history_intact():
+def test_human_observation_timeout_can_be_retried():
     game = ChessGame()
     arm = MockArm(game.board)
     vision = FakeVision(arm)
@@ -96,11 +96,16 @@ def test_human_observation_timeout_leaves_reference_and_history_intact():
     controller.step()
     arm.pieces[chess.E4] = arm.pieces.pop(chess.E2)
     vision.stable = False
-    assert controller.step() is GameState.ERROR
-    assert "TimeoutError" in controller.error
+    assert controller.step() is GameState.WAIT_HUMAN
+    assert controller.error is None
+    assert controller.last_observation_timeout == "No stable frame"
     assert not game.history and not engine.positions and not arm.log
     assert len(vision.confirmed) == 1
     assert vision.timeouts == [3, 3]
+    vision.stable = True
+    assert controller.step() is GameState.WAIT_HUMAN
+    assert controller.last_observation_timeout is None
+    assert [move.uci() for move in game.history] == ["e2e4", "e7e5"]
 
 
 def test_empty_changes_cannot_confirm_human_move():
@@ -139,7 +144,7 @@ def test_partial_capture_failure_keeps_logical_position_and_stops():
     assert len(arm.log) == 2
 
 
-@pytest.mark.parametrize("problem", [None, "occupancy", "changes", "timeout"])
+@pytest.mark.parametrize("problem", [None, "occupancy", "changes"])
 def test_robot_move_awaits_reliable_verification_without_reexecution(problem):
     game = ChessGame()
     arm = MockArm(game.board)
@@ -162,10 +167,60 @@ def test_robot_move_awaits_reliable_verification_without_reexecution(problem):
         vision.hidden_square = chess.E4
     elif problem == "changes":
         vision.report_changes = False
-    elif problem == "timeout":
-        vision.stable = False
     expected = GameState.ERROR if problem else GameState.WAIT_HUMAN
     assert controller.step() is expected
     assert len(game.history) == (0 if problem else 1)
     assert len(vision.confirmed) == (1 if problem else 2)
     assert len(arm.log) == 1
+
+
+def test_robot_observation_timeout_retries_only_verification():
+    game = ChessGame()
+    arm = MockArm(game.board)
+    vision = FakeVision(arm)
+    engine = ScriptedEngine("e2e4")
+
+    class ObscuredAfterMotion(MockArm):
+        def execute(self, action):
+            result = super().execute(action)
+            vision.stable = False
+            return result
+
+    arm = ObscuredAfterMotion(game.board)
+    vision.arm = arm
+    controller = GameController(game, vision, engine, arm, robot_color=chess.WHITE)
+    assert controller.step() is GameState.VERIFY_ROBOT
+    assert controller.step() is GameState.VERIFY_ROBOT
+    assert controller.last_observation_timeout
+    assert not game.history
+    assert len(vision.confirmed) == 1
+    vision.stable = True
+    assert controller.step() is GameState.WAIT_HUMAN
+    assert [move.uci() for move in game.history] == ["e2e4"]
+    assert len(arm.log) == len(engine.positions) == 1
+
+
+@pytest.mark.parametrize("robot_color", [chess.WHITE, chess.BLACK])
+def test_failed_reference_confirmation_does_not_commit_move(robot_color):
+    class FailingConfirmation(FakeVision):
+        def confirm_observation(self, observation):
+            if self.confirmed:
+                raise TimeoutError("Reference could not be saved")
+            super().confirm_observation(observation)
+
+    game = ChessGame()
+    arm = MockArm(game.board)
+    vision = FailingConfirmation(arm)
+    engine = ScriptedEngine("e2e4")
+    controller = GameController(game, vision, engine, arm, robot_color=robot_color)
+    if robot_color == chess.BLACK:
+        assert controller.step() is GameState.WAIT_HUMAN
+        arm.pieces[chess.E4] = arm.pieces.pop(chess.E2)
+    assert controller.step() is GameState.ERROR
+    assert "Reference could not be saved" in controller.error
+    assert controller.last_observation_timeout is None
+    assert game.board.fen() == chess.STARTING_FEN
+    assert not game.history
+    assert vision.reference == game.board.piece_map()
+    assert controller.step() is GameState.ERROR
+    assert len(arm.log) == (1 if robot_color == chess.WHITE else 0)
